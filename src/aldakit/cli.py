@@ -236,7 +236,11 @@ def transcribe_command(args: argparse.Namespace) -> int:
                 name = NOTE_NAMES[pitch % 12]
                 octave = (pitch // 12) - 1
                 if is_on:
-                    print(f"  Note ON:  {name}{octave} (vel={velocity})", file=sys.stderr, flush=True)
+                    print(
+                        f"  Note ON:  {name}{octave} (vel={velocity})",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 else:
                     print(f"  Note OFF: {name}{octave}", file=sys.stderr, flush=True)
 

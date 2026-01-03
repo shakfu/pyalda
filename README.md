@@ -412,7 +412,7 @@ score.play()
 ```sh
 aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME]
        [--stdin] [--parse-only] [--no-wait] [-v]
-       {repl,ports,play} [file]
+       {repl,ports,input-ports,transcribe,play} [file]
 ```
 
 ### Subcommands
@@ -421,6 +421,8 @@ aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME]
 | ------- | ----------- |
 | `repl` | Interactive REPL with syntax highlighting and auto-completion |
 | `ports` | List available MIDI output ports |
+| `input-ports` | List available MIDI input ports |
+| `transcribe` | Record MIDI input and output Alda code |
 | `play` | Play an Alda file or code (default behavior) |
 
 ### Options
@@ -445,6 +447,9 @@ aldakit repl
 # List available MIDI ports
 aldakit ports
 
+# List available MIDI input ports
+aldakit input-ports
+
 # Play with verbose output
 aldakit -v examples/jazz.alda
 
@@ -456,6 +461,25 @@ aldakit --parse-only -e "piano: c/e/g"
 
 # Export to MIDI file
 aldakit examples/twinkle.alda -o twinkle.mid
+
+# Record MIDI input for 10 seconds (default)
+aldakit transcribe
+
+# Record for 30 seconds with verbose note display
+aldakit transcribe -d 30 -v
+
+# Record with Alda-style note display
+aldakit transcribe -d 10 -v --alda-notes
+
+# Record and save to file
+aldakit transcribe -o recording.alda
+aldakit transcribe -o recording.mid
+
+# Record and play back
+aldakit transcribe --play
+
+# Record with custom settings
+aldakit transcribe -d 20 -t 90 -i guitar -q 0.5 --play
 ```
 
 ## Interactive REPL

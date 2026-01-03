@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4]
+
 ### Added
 
 #### High-Level Python API
@@ -225,6 +227,22 @@ Record MIDI input from a keyboard or controller and convert to Alda:
   - Configurable quantization grid
   - Gap detection and rest insertion
   - Pending note handling (notes still held when recording stops)
+
+#### CLI Transcription Commands
+
+- **New subcommands:**
+  - `aldakit input-ports` - list available MIDI input ports
+  - `aldakit transcribe` - record MIDI input and output Alda code
+- **Transcribe options:**
+  - `-d, --duration SECONDS` - recording duration (default: 10)
+  - `-i, --instrument NAME` - instrument name (default: piano)
+  - `-t, --tempo BPM` - tempo for quantization (default: 120)
+  - `-q, --quantize GRID` - quantize grid in beats (default: 0.25 = 16th notes)
+  - `-o, --output FILE` - save to file (.alda or .mid)
+  - `--port NAME` - MIDI input port name
+  - `--play` - play back the recording after transcription
+  - `-v, --verbose` - show notes as they are played
+  - `--alda-notes` - show notes in Alda notation (with -v)
 
 ## [0.1.3]
 
