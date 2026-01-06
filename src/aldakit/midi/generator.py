@@ -384,10 +384,8 @@ class MidiGenerator:
             part.volume = dynamics.get(func_name, 80)
 
     def _process_variable_definition(self, node: VariableDefinitionNode) -> None:
-        """Process a variable definition."""
+        """Process a variable definition (store only, don't emit sound)."""
         self.state.variables[node.name] = node.events
-        # Also process the events
-        self._process_event_sequence(node.events)
 
     def _process_variable_reference(self, node: VariableReferenceNode) -> None:
         """Process a variable reference."""

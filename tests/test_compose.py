@@ -36,6 +36,7 @@ from aldakit.ast_nodes import (
     ChordNode,
     EventSequenceNode,
     PartDeclarationNode,
+    PartNode,
     LispListNode,
     OctaveSetNode,
     OctaveUpNode,
@@ -497,6 +498,60 @@ class TestScoreFromElements:
         # MIDI files start with "MThd"
         with open(output, "rb") as f:
             assert f.read(4) == b"MThd"
+
+    def test_part_generates_partnode_in_ast(self):
+        """Regression: compose API must wrap parts in PartNode for MIDI generator."""
+        score = Score.from_elements(part("violin"), note("c"), note("d"))
+        ast = score.ast
+        # Should have exactly one PartNode wrapping declaration + events
+        part_nodes = [c for c in ast.children if isinstance(c, PartNode)]
+        assert len(part_nodes) == 1
+        assert part_nodes[0].declaration.names == ["violin"]
+        assert len(part_nodes[0].events.events) == 2
+
+    def test_part_instrument_honored_in_midi(self):
+        """Regression: instrument from part() must affect MIDI program change."""
+        score = Score.from_elements(part("violin"), note("c"))
+        midi = score.midi
+        # Violin should be MIDI program 40, not 0 (piano)
+        assert any(pc.program == 40 for pc in midi.program_changes)
+
+    def test_multiple_parts_generate_multiple_partnodes(self):
+        """Regression: multiple parts should each get their own PartNode."""
+        score = Score.from_elements(
+            part("piano"), note("c"),
+            part("violin"), note("d"),
+        )
+        ast = score.ast
+        part_nodes = [c for c in ast.children if isinstance(c, PartNode)]
+        assert len(part_nodes) == 2
+        assert part_nodes[0].declaration.names == ["piano"]
+        assert part_nodes[1].declaration.names == ["violin"]
+
+    def test_to_alda_with_chord_no_crash(self):
+        """Regression: to_alda() must not crash on chords (ChordNode has no duration)."""
+        score = Score.from_elements(part("piano"), chord("c", "e", "g", duration=4))
+        # This used to raise AttributeError: 'ChordNode' has no attribute 'duration'
+        alda = score.to_alda()
+        assert "c" in alda
+        assert "e" in alda
+        assert "g" in alda
+
+    def test_to_alda_preserves_part_structure(self):
+        """Regression: to_alda() must render PartNode with declaration + events."""
+        score = Score.from_elements(
+            part("violin"), note("c"), note("d"),
+            part("piano"), note("e"), note("f"),
+        )
+        alda = score.to_alda()
+        # Both parts should be present in output
+        assert "violin:" in alda
+        assert "piano:" in alda
+        # Notes should be present
+        assert "c" in alda
+        assert "d" in alda
+        assert "e" in alda
+        assert "f" in alda
 
 
 class TestIntegration:

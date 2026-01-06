@@ -3,9 +3,11 @@
 from aldakit import parse, generate_midi
 from aldakit.midi import (
     MidiSequence,
+    MidiTempoChange,
     note_to_midi,
     INSTRUMENT_PROGRAMS,
 )
+from aldakit.midi.smf import TempoMap
 
 
 class TestNoteToMidi:
@@ -209,8 +211,8 @@ class TestVariables:
     def test_variable_definition_and_reference(self):
         ast = parse("theme = c d e\ntheme theme")
         seq = generate_midi(ast)
-        # 3 notes from definition + 3 + 3 from two references = 9
-        assert len(seq.notes) == 9
+        # Definition stores but doesn't emit; 3 + 3 from two references = 6
+        assert len(seq.notes) == 6
 
 
 class TestRepeats:
@@ -279,3 +281,88 @@ class TestInstrumentMapping:
         assert INSTRUMENT_PROGRAMS["flute"] == 73
         assert INSTRUMENT_PROGRAMS["trumpet"] == 56
         assert INSTRUMENT_PROGRAMS["cello"] == 42
+
+
+class TestVariableSemantics:
+    """Test variable definition semantics."""
+
+    def test_variable_definition_does_not_emit_sound(self):
+        """Regression: variable definition should only store, not emit notes."""
+        ast = parse("theme = c d e")
+        seq = generate_midi(ast)
+        # Definition alone should not emit any notes
+        assert len(seq.notes) == 0
+
+    def test_variable_only_plays_when_referenced(self):
+        """Variable content should only play on reference."""
+        ast = parse("theme = c d e\ntheme")
+        seq = generate_midi(ast)
+        # Only one reference = 3 notes
+        assert len(seq.notes) == 3
+
+
+class TestTempoMap:
+    """Test TempoMap for accurate MIDI timing across tempo changes."""
+
+    def test_no_tempo_changes_uses_default(self):
+        """With no tempo changes, use default 120 BPM."""
+        seq = MidiSequence(ticks_per_beat=480)
+        tempo_map = TempoMap(seq)
+        # At 120 BPM, 1 second = 2 beats = 960 ticks
+        assert tempo_map.seconds_to_ticks(1.0) == 960
+
+    def test_single_tempo_at_start(self):
+        """Single tempo change at t=0."""
+        seq = MidiSequence(
+            tempo_changes=[MidiTempoChange(bpm=60.0, time=0.0)],
+            ticks_per_beat=480,
+        )
+        tempo_map = TempoMap(seq)
+        # At 60 BPM, 1 second = 1 beat = 480 ticks
+        assert tempo_map.seconds_to_ticks(1.0) == 480
+        assert tempo_map.seconds_to_ticks(2.0) == 960
+
+    def test_tempo_change_mid_score(self):
+        """Regression: tempo changes after t=0 must integrate correctly."""
+        seq = MidiSequence(
+            tempo_changes=[
+                MidiTempoChange(bpm=120.0, time=0.0),  # 120 BPM for first 2 sec
+                MidiTempoChange(bpm=60.0, time=2.0),   # 60 BPM after
+            ],
+            ticks_per_beat=480,
+        )
+        tempo_map = TempoMap(seq)
+
+        # t=0: tick 0
+        assert tempo_map.seconds_to_ticks(0.0) == 0
+
+        # t=1 sec at 120 BPM: 1 sec * 2 beats/sec * 480 ticks/beat = 960
+        assert tempo_map.seconds_to_ticks(1.0) == 960
+
+        # t=2 sec at 120 BPM: 2 sec * 2 beats/sec * 480 ticks/beat = 1920
+        assert tempo_map.seconds_to_ticks(2.0) == 1920
+
+        # t=3 sec: 2 sec at 120 BPM (1920 ticks) + 1 sec at 60 BPM (480 ticks) = 2400
+        assert tempo_map.seconds_to_ticks(3.0) == 2400
+
+        # t=4 sec: 1920 + 2 sec at 60 BPM (960 ticks) = 2880
+        assert tempo_map.seconds_to_ticks(4.0) == 2880
+
+    def test_multiple_tempo_changes(self):
+        """Multiple tempo changes integrate correctly."""
+        seq = MidiSequence(
+            tempo_changes=[
+                MidiTempoChange(bpm=120.0, time=0.0),
+                MidiTempoChange(bpm=60.0, time=1.0),
+                MidiTempoChange(bpm=240.0, time=2.0),
+            ],
+            ticks_per_beat=480,
+        )
+        tempo_map = TempoMap(seq)
+
+        # 0-1 sec at 120 BPM: 960 ticks
+        # 1-2 sec at 60 BPM: 480 ticks (total: 1440)
+        # 2-3 sec at 240 BPM: 1920 ticks (total: 3360)
+        assert tempo_map.seconds_to_ticks(1.0) == 960
+        assert tempo_map.seconds_to_ticks(2.0) == 1440
+        assert tempo_map.seconds_to_ticks(3.0) == 3360

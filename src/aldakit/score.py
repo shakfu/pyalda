@@ -7,7 +7,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .ast_nodes import EventSequenceNode, RootNode
+from .ast_nodes import EventSequenceNode, PartNode, RootNode
 from .midi.backends import LibremidiBackend
 from .midi.generator import generate_midi
 from .midi.smf import write_midi_file
@@ -38,6 +38,7 @@ def _ast_to_alda(ast: RootNode) -> str:
         OctaveSetNode,
         OctaveUpNode,
         PartDeclarationNode,
+        PartNode as PartNodeType,
         RestNode,
     )
 
@@ -55,7 +56,13 @@ def _ast_to_alda(ast: RootNode) -> str:
         return ""
 
     def node_to_str(node) -> str:
-        if isinstance(node, PartDeclarationNode):
+        if isinstance(node, PartNodeType):
+            # PartNode wraps declaration + events
+            decl_str = node_to_str(node.declaration)
+            events_str = node_to_str(node.events)
+            return f"{decl_str} {events_str}"
+
+        elif isinstance(node, PartDeclarationNode):
             instruments = "/".join(node.names)
             return f"\n{instruments}:\n"
 
@@ -71,8 +78,8 @@ def _ast_to_alda(ast: RootNode) -> str:
             return result
 
         elif isinstance(node, ChordNode):
+            # Notes carry their own durations; ChordNode has no duration attr
             notes = "/".join(node_to_str(n) for n in node.notes)
-            notes += duration_to_str(node.duration)
             return notes
 
         elif isinstance(node, LispListNode):
@@ -317,31 +324,50 @@ class Score:
 
     def _build_ast_from_elements(self) -> RootNode:
         """Build AST directly from compose elements."""
+        from .ast_nodes import PartDeclarationNode
+
         from .compose.part import Part
 
         children = []
-        current_events = []
+        current_events: list = []
+        current_part_decl: PartDeclarationNode | None = None
+
+        def flush_part():
+            """Flush accumulated events, wrapping in PartNode if there's a declaration."""
+            nonlocal current_events, current_part_decl
+            if current_part_decl is not None:
+                # Wrap declaration and events in a PartNode
+                children.append(
+                    PartNode(
+                        declaration=current_part_decl,
+                        events=EventSequenceNode(events=current_events, position=None),
+                        position=None,
+                    )
+                )
+                current_part_decl = None
+                current_events = []
+            elif current_events:
+                # No part declaration - bare event sequence
+                children.append(
+                    EventSequenceNode(events=current_events, position=None)
+                )
+                current_events = []
 
         for element in self._elements:
             ast_node = element.to_ast()
 
-            # Parts need special handling - they're top-level nodes
             if isinstance(element, Part):
-                # Flush any accumulated events first
-                if current_events:
-                    children.append(
-                        EventSequenceNode(events=current_events, position=None)
-                    )
-                    current_events = []
-                # Add part declaration (will be followed by events)
-                children.append(ast_node)
+                # Flush previous part first
+                flush_part()
+                # Start new part - Part.to_ast() returns PartDeclarationNode
+                assert isinstance(ast_node, PartDeclarationNode)
+                current_part_decl = ast_node
             else:
                 # Accumulate events
                 current_events.append(ast_node)
 
-        # Flush remaining events
-        if current_events:
-            children.append(EventSequenceNode(events=current_events, position=None))
+        # Flush remaining content
+        flush_part()
 
         return RootNode(children=children, position=None)
 

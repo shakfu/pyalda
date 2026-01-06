@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Compose API part declarations now generate correct AST structure**
+  - `Score.from_elements(part("violin"), note("c"))` now wraps declarations and events in `PartNode`, so instruments are properly honored during MIDI generation.
+  - Previously, bare `PartDeclarationNode` objects were ignored by the MIDI generator, causing all parts to play as piano (program 0).
+
+- **`to_alda()` now handles `PartNode` and `ChordNode` correctly**
+  - `PartNode` is now explicitly rendered with its declaration and events, preserving part structure in round-trips.
+  - `ChordNode` no longer crashes with `AttributeError` (it has no `duration` attribute; individual notes carry their durations).
+
+- **Variable definitions no longer emit sound immediately**
+  - `theme = c d e` now only stores the events; sound is emitted only when the variable is referenced (`theme`).
+  - Previously, definitions would double-play content (once at definition, once at each reference).
+
+- **MIDI file writer now handles tempo changes correctly**
+  - Introduced `TempoMap` class that properly integrates tick positions across tempo segments.
+  - Channel tracks now use the same tempo map as the tempo track, ensuring notes align with tempo changes.
+  - Previously, tempo changes mid-score caused timing drift because timestamps were converted using a single constant tempo.
+
 ## [0.1.5]
 
 ### Added
