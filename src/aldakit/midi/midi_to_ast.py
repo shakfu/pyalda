@@ -44,9 +44,17 @@ DURATION_VALUES: list[tuple[int, float]] = [
     (1, 4.0),  # whole note
     (2, 2.0),  # half note
     (4, 1.0),  # quarter note
+    (6, 0.6666666667),  # two-thirds beat (used for swing)
     (8, 0.5),  # eighth note
+    (12, 0.3333333333),  # triplet eighth (12th note)
     (16, 0.25),  # sixteenth note
+    (20, 0.2),  # quintuplet eighth (20th note)
+    (24, 0.1666666667),  # triplet sixteenth (24th note)
     (32, 0.125),  # thirty-second note
+    (40, 0.1),  # quintuplet sixteenth
+    (48, 0.0833333333),  # triplet thirty-second
+    (64, 0.0625),  # sixty-fourth note
+    (80, 0.05),  # quintuplet thirty-second
 ]
 
 # Dotted versions add 50% more
@@ -55,7 +63,9 @@ DOTTED_DURATION_VALUES: list[tuple[int, int, float]] = [
     (2, 1, 3.0),  # dotted half
     (4, 1, 1.5),  # dotted quarter
     (8, 1, 0.75),  # dotted eighth
+    (12, 1, 0.5),  # dotted triplet eighth
     (16, 1, 0.375),  # dotted sixteenth
+    (24, 1, 0.25),  # dotted triplet sixteenth
 ]
 
 
@@ -75,6 +85,8 @@ class _QuantizedNote:
     start_beat: float
     duration_beats: float
     channel: int
+    start_seconds: float
+    duration_seconds: float
 
 
 def midi_pitch_to_note(pitch: int) -> tuple[str, int, list[str]]:
@@ -109,6 +121,18 @@ def _make_duration_node(denominator: int, dots: int = 0) -> DurationNode:
     )
 
 
+def _make_tempo_node(bpm: float, global_: bool = False) -> LispListNode:
+    """Create a tempo or tempo! lisp node."""
+    symbol = "tempo!" if global_ else "tempo"
+    return LispListNode(
+        elements=[
+            LispSymbolNode(name=symbol, position=None),
+            LispNumberNode(value=int(round(bpm)), position=None),
+        ],
+        position=None,
+    )
+
+
 def beats_to_duration(beats: float) -> tuple[int, int]:
     """Convert beats to the closest duration value and dots.
 
@@ -119,6 +143,10 @@ def beats_to_duration(beats: float) -> tuple[int, int]:
         Tuple of (duration_value, dots). Duration value is Alda's notation
         where 4 = quarter, 8 = eighth, etc.
     """
+    candidate = beats
+    expected = getattr(candidate, "expected", candidate)
+    beats = float(expected)
+
     if beats <= 0:
         return 4, 0  # Default to quarter note
 
@@ -154,6 +182,19 @@ def beats_to_duration(beats: float) -> tuple[int, int]:
     return best_duration, best_dots
 
 
+def duration_value_to_beats(denominator: int, dots: int = 0) -> float:
+    """Convert a duration value back to beats."""
+    if denominator <= 0:
+        return 0.0
+    base = 4.0 / denominator
+    total = base
+    addition = base / 2.0
+    for _ in range(dots):
+        total += addition
+        addition /= 2.0
+    return total
+
+
 def quantize_to_grid(value: float, grid: float) -> float:
     """Quantize a value to the nearest grid point."""
     if grid <= 0:
@@ -178,10 +219,10 @@ def midi_to_ast(
         A RootNode representing the imported MIDI.
     """
     # Determine tempo
-    bpm = default_bpm
-    if sequence.tempo_changes:
-        # Use the first tempo change
-        bpm = sequence.tempo_changes[0].bpm
+    tempo_changes = sorted(sequence.tempo_changes, key=lambda t: t.time)
+    bpm = tempo_changes[0].bpm if tempo_changes else default_bpm
+    per_part_tempos = tempo_changes[1:] if tempo_changes else []
+    tempo_events = [(tc.time, tc.bpm) for tc in per_part_tempos]
 
     # Group notes by channel
     channels: dict[int, list[MidiNote]] = {}
@@ -201,14 +242,7 @@ def midi_to_ast(
 
     # Add tempo if not default
     if abs(bpm - 120.0) > 0.1:
-        tempo_node = LispListNode(
-            elements=[
-                LispSymbolNode(name="tempo!", position=None),
-                LispNumberNode(value=int(bpm), position=None),
-            ],
-            position=None,
-        )
-        children.append(tempo_node)
+        children.append(_make_tempo_node(bpm, global_=True))
 
     for channel in sorted(channels.keys()):
         notes = channels[channel]
@@ -231,7 +265,7 @@ def midi_to_ast(
         quantized = _quantize_notes(notes, bpm, quantize_grid)
 
         # Convert to AST events
-        events = _notes_to_events(quantized, bpm)
+        events = _notes_to_events(quantized, bpm, tempo_events)
         if events:
             event_seq = EventSequenceNode(events=events, position=None)
             children.append(event_seq)
@@ -262,6 +296,8 @@ def _quantize_notes(
                 start_beat=start_beats,
                 duration_beats=duration_beats,
                 channel=note.channel,
+                start_seconds=note.start_time,
+                duration_seconds=note.duration,
             )
         )
 
@@ -270,7 +306,9 @@ def _quantize_notes(
     return result
 
 
-def _notes_to_events(notes: list[_QuantizedNote], bpm: float) -> list:
+def _notes_to_events(
+    notes: list[_QuantizedNote], bpm: float, tempo_events: list[tuple[float, float]]
+) -> list:
     """Convert quantized notes to AST events."""
     if not notes:
         return []
@@ -278,10 +316,14 @@ def _notes_to_events(notes: list[_QuantizedNote], bpm: float) -> list:
     events: list = []
     current_beat = 0.0
     current_octave = 4  # Default octave
+    tempo_index = 0
 
     i = 0
     while i < len(notes):
         note = notes[i]
+        tempo_index = _emit_due_tempos(
+            tempo_events, tempo_index, note.start_seconds, events
+        )
 
         # Insert rest if there's a gap
         gap = note.start_beat - current_beat
@@ -360,4 +402,17 @@ def _notes_to_events(notes: list[_QuantizedNote], bpm: float) -> list:
             current_beat = note.start_beat + note.duration_beats
             i += 1
 
+    _emit_due_tempos(tempo_events, tempo_index, float("inf"), events)
     return events
+
+
+def _emit_due_tempos(
+    tempo_events: list[tuple[float, float]],
+    index: int,
+    target_time: float,
+    events: list,
+) -> int:
+    while index < len(tempo_events) and tempo_events[index][0] <= target_time + 1e-4:
+        events.append(_make_tempo_node(tempo_events[index][1], global_=False))
+        index += 1
+    return index

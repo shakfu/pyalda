@@ -14,7 +14,7 @@ def play(source: str, port: str | None = None, wait: bool = True) -> None:
     Args:
         source: Alda source code string.
         port: MIDI output port name. If None, uses the first available
-            port or creates a virtual port named "AldaPyMIDI".
+            port or creates a virtual port named "AldakitMIDI".
         wait: If True (default), block until playback completes.
 
     Examples:
@@ -32,7 +32,7 @@ def play_file(path: str | Path, port: str | None = None, wait: bool = True) -> N
     Args:
         path: Path to the Alda file.
         port: MIDI output port name. If None, uses the first available
-            port or creates a virtual port named "AldaPyMIDI".
+            port or creates a virtual port named "AldakitMIDI".
         wait: If True (default), block until playback completes.
 
     Examples:

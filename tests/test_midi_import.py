@@ -7,11 +7,13 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from aldakit import Score
+from aldakit.ast_nodes import EventSequenceNode, LispListNode
 from aldakit.midi.smf_reader import read_midi_file, MidiParseError
 from aldakit.midi.midi_to_ast import (
     midi_pitch_to_note,
     seconds_to_beats,
     beats_to_duration,
+    duration_value_to_beats,
     quantize_to_grid,
     midi_to_ast,
 )
@@ -119,6 +121,34 @@ class TestBeatsToDuration:
         assert duration == 4
         assert dots == 1
 
+    def test_triplet_eighth_duration(self):
+        """Triplet subdivision uses denominator 12."""
+        duration, dots = beats_to_duration(pytest.approx(1 / 3))
+        assert duration == 12
+        assert dots == 0
+
+    def test_quintuplet_duration(self):
+        """Quintuplet subdivision uses denominator 20."""
+        duration, dots = beats_to_duration(pytest.approx(0.2))
+        assert duration == 20
+        assert dots == 0
+
+
+class TestDurationValueToBeats:
+    """Tests for duration_value_to_beats helper."""
+
+    def test_round_trip_quarter(self):
+        beats = duration_value_to_beats(4, 0)
+        assert beats == pytest.approx(1.0)
+
+    def test_round_trip_dotted_eighth(self):
+        beats = duration_value_to_beats(8, 1)
+        assert beats == pytest.approx(0.75)
+
+    def test_twelfth_note(self):
+        beats = duration_value_to_beats(12, 0)
+        assert beats == pytest.approx(1 / 3)
+
 
 class TestQuantizeToGrid:
     """Tests for quantize_to_grid function."""
@@ -183,6 +213,42 @@ class TestMidiToAst:
         )
         ast = midi_to_ast(seq)
         assert ast is not None
+
+    def test_tempo_changes_inserted_in_parts(self):
+        """Subsequent tempo changes are emitted as part events."""
+        seq = MidiSequence(
+            notes=[
+                MidiNote(
+                    pitch=60,
+                    velocity=100,
+                    start_time=0.0,
+                    duration=0.5,
+                    channel=0,
+                ),
+                MidiNote(
+                    pitch=62,
+                    velocity=100,
+                    start_time=1.0,
+                    duration=0.5,
+                    channel=0,
+                ),
+            ],
+            tempo_changes=[
+                MidiTempoChange(bpm=110.0, time=0.0),
+                MidiTempoChange(bpm=90.0, time=0.8),
+            ],
+        )
+        ast = midi_to_ast(seq)
+        event_seq = next(
+            child for child in ast.children if isinstance(child, EventSequenceNode)
+        )
+        tempo_nodes = [
+            node for node in event_seq.events if isinstance(node, LispListNode)
+        ]
+        assert any(
+            node.elements and getattr(node.elements[0], "name", "") == "tempo"
+            for node in tempo_nodes
+        )
 
     def test_multiple_channels(self):
         """Multiple channels become separate parts."""

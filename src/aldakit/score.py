@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from .ast_nodes import EventSequenceNode, RootNode
 from .midi.backends import LibremidiBackend
 from .midi.generator import generate_midi
+from .midi.smf import write_midi_file
 from .parser import parse
 
 if TYPE_CHECKING:
@@ -439,7 +440,7 @@ class Score:
 
         Args:
             port: MIDI output port name. If None, uses the first available
-                port or creates a virtual port named "AldaPyMIDI".
+                port or creates a virtual port named "AldakitMIDI".
             wait: If True (default), block until playback completes.
         """
         with LibremidiBackend(port_name=port) as backend:
@@ -458,14 +459,12 @@ class Score:
         """
         path = Path(path)
         if path.suffix in (".mid", ".midi"):
-            backend = LibremidiBackend()
-            backend.save(self.midi, path)
+            write_midi_file(self.midi, path)
         elif path.suffix == ".alda":
             path.write_text(self.to_alda(), encoding="utf-8")
         else:
             # Default to MIDI
-            backend = LibremidiBackend()
-            backend.save(self.midi, path)
+            write_midi_file(self.midi, path)
 
     def __repr__(self) -> str:
         if self._mode == _MODE_SOURCE:

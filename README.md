@@ -1,6 +1,6 @@
 # aldakit
 
-[![PyPI version](https://img.shields.io/pypi/v/aldakit)](https://pypi.org/project/aldakit/)
+[![PyPI version](https://badge.fury.io/py/aldakit.svg)](https://pypi.org/project/aldakit/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -424,9 +424,9 @@ score.play()
 ## CLI Reference
 
 ```sh
-aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME]
+aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME|INDEX]
        [--stdin] [--parse-only] [--no-wait] [-v]
-       {repl,ports,input-ports,transcribe,play} [file]
+       {repl,ports,transcribe,play} [file]
 ```
 
 ### Subcommands
@@ -434,8 +434,7 @@ aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME]
 | Command | Description |
 | ------- | ----------- |
 | `repl` | Interactive REPL with syntax highlighting and auto-completion |
-| `ports` | List available MIDI output ports |
-| `input-ports` | List available MIDI input ports |
+| `ports` | List available MIDI ports (both input and output) |
 | `transcribe` | Record MIDI input and output Alda code |
 | `play` | Play an Alda file or code (default behavior) |
 
@@ -446,7 +445,7 @@ aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME]
 | `file` | Alda file to play (use `-` for stdin) |
 | `-e, --eval CODE` | Evaluate Alda code directly |
 | `-o, --output FILE` | Save to MIDI file instead of playing |
-| `--port NAME` | MIDI output port name |
+| `--port NAME\|INDEX` | MIDI port by name or index (see `aldakit ports`). Auto-selects if only one port available. |
 | `--stdin` | Read from stdin (blank line to play) |
 | `--parse-only` | Print AST without playing |
 | `--no-wait` | Don't wait for playback to finish |
@@ -458,14 +457,17 @@ aldakit [-h] [--version] [-e CODE] [-o FILE] [--port NAME]
 # Interactive REPL with syntax highlighting
 aldakit repl
 
-# List available MIDI ports
+# List available MIDI ports (input and output)
 aldakit ports
-
-# List available MIDI input ports
-aldakit input-ports
+aldakit ports -o  # output ports only
+aldakit ports -i  # input ports only
 
 # Play with verbose output
 aldakit -v examples/jazz.alda
+
+# Play to a specific port (by index or name)
+aldakit --port 0 examples/twinkle.alda
+aldakit --port FluidSynth examples/twinkle.alda
 
 # Read from stdin
 echo "piano: c d e f g" | aldakit -
@@ -478,6 +480,10 @@ aldakit examples/twinkle.alda -o twinkle.mid
 
 # Record MIDI input for 10 seconds (default)
 aldakit transcribe
+
+# Record from a specific input port (by index or name)
+aldakit transcribe --port 0
+aldakit transcribe --port "My MIDI Keyboard"
 
 # Record for 30 seconds with verbose note display
 aldakit transcribe -d 30 -v
@@ -492,8 +498,8 @@ aldakit transcribe -o recording.mid
 # Record and play back
 aldakit transcribe --play
 
-# Record with custom settings
-aldakit transcribe -d 20 -t 90 -i guitar -q 0.5 --play
+# Record with custom settings (swing feel, triplet quantization)
+aldakit transcribe -d 20 -t 90 -i guitar --feel triplet --play
 ```
 
 ## Interactive REPL
@@ -660,7 +666,7 @@ See [midi/types.py](https://github.com/shakfu/aldakit/blob/main/src/aldakit/midi
 aldakit uses [libremidi](https://github.com/jcelerier/libremidi) via [nanobind](https://github.com/wjakob/nanobind) for cross-platform MIDI I/O:
 
 - Low-latency realtime playback
-- Virtual MIDI port support (AldaPyMIDI), makes it easy to just send to your DAW.
+- Virtual MIDI port support (AldakitMIDI), makes it easy to just send to your DAW.
 - Pure Python MIDI file writing (no external dependencies)
 - Cross-platform: macOS (CoreMIDI), Linux (ALSA), Windows (WinMM)
 - Supports hardware and software/virtual MIDI ports (FluidSynth, IAC Driver, etc.)
@@ -685,10 +691,10 @@ aldakit.save("piano: c d e f g", "output.mid")
 
 ### Virtual Port (Recommended)
 
-When no hardware MIDI ports are available, aldakit creates a virtual port named "AldaPyMIDI". This port is visible to DAWs and other MIDI software:
+When no hardware MIDI ports are available, aldakit creates a virtual port named "AldakitMIDI". This port is visible to DAWs and other MIDI software:
 
 1. Start the REPL: `aldakit repl`
-2. In your DAW (Ableton Live, Logic Pro, etc.), look for "AldaPyMIDI" in MIDI input settings
+2. In your DAW (Ableton Live, Logic Pro, etc.), look for "AldakitMIDI" in MIDI input settings
 3. Play code in the REPL - notes will be sent to your DAW
 
 ### Software Synthesizer (FluidSynth)

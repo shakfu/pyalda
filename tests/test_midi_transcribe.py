@@ -1,12 +1,14 @@
 """Tests for MIDI transcription functionality."""
 
+import pytest
+
 from aldakit.midi.transcriber import (
     TranscribeSession,
     PendingNote,
     RecordedNote,
     list_input_ports,
 )
-from aldakit.compose.core import Note, Rest
+from aldakit.compose.core import Note, Rest, Cram, Chord
 
 
 # =============================================================================
@@ -24,41 +26,6 @@ class TestTranscribeSession:
         assert session.quantize_grid == 0.25
         assert session.default_tempo == 120.0
         assert not session._running
-
-    def test_seconds_to_duration_quarter(self):
-        """Quarter note at 120 BPM = 0.5 seconds."""
-        session = TranscribeSession(default_tempo=120.0)
-        # At 120 BPM, one beat = 0.5s, so 0.5s = 1 beat = quarter note
-        duration = session._seconds_to_duration(0.5)
-        assert duration == 4  # quarter note
-
-    def test_seconds_to_duration_eighth(self):
-        """Eighth note at 120 BPM = 0.25 seconds."""
-        session = TranscribeSession(default_tempo=120.0)
-        # 0.25s = 0.5 beats = eighth note
-        duration = session._seconds_to_duration(0.25)
-        assert duration == 8  # eighth note
-
-    def test_seconds_to_duration_half(self):
-        """Half note at 120 BPM = 1.0 seconds."""
-        session = TranscribeSession(default_tempo=120.0)
-        # 1.0s = 2 beats = half note
-        duration = session._seconds_to_duration(1.0)
-        assert duration == 2  # half note
-
-    def test_seconds_to_duration_whole(self):
-        """Whole note at 120 BPM = 2.0 seconds."""
-        session = TranscribeSession(default_tempo=120.0)
-        # 2.0s = 4 beats = whole note
-        duration = session._seconds_to_duration(2.0)
-        assert duration == 1  # whole note
-
-    def test_seconds_to_duration_with_quantize(self):
-        """Duration quantizes to grid."""
-        session = TranscribeSession(default_tempo=120.0, quantize_grid=0.25)
-        # 0.3s is close to 0.25s (eighth note)
-        duration = session._seconds_to_duration(0.3)
-        assert duration == 8  # eighth note
 
     def test_notes_to_seq_empty(self):
         """Empty notes produce empty Seq."""
@@ -80,6 +47,7 @@ class TestTranscribeSession:
         assert note.pitch == "c"
         assert note.octave == 4
         assert note.duration == 4  # quarter note
+        assert note.dots == 0
 
     def test_notes_to_seq_multiple_notes(self):
         """Multiple notes convert correctly."""
@@ -122,6 +90,129 @@ class TestTranscribeSession:
         note = seq.elements[0]
         assert note.pitch == "c"
         assert note.accidental == "+"
+
+    def test_notes_to_seq_dotted_values(self):
+        """Durations that fall on dotted grid emit dot counts."""
+        session = TranscribeSession(default_tempo=120.0)
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.375)
+        ]
+        seq = session._notes_to_seq()
+        note = seq.elements[0]
+        assert note.duration == 8
+        assert note.dots == 1
+
+    def test_notes_to_seq_creates_ties(self):
+        """Durations longer than catalog split into tied notes."""
+        session = TranscribeSession(default_tempo=120.0)
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=1.25)
+        ]  # 2.5 beats
+        seq = session._notes_to_seq()
+        assert len(seq.elements) == 2
+        first, second = seq.elements
+        assert isinstance(first, Note) and isinstance(second, Note)
+        assert first.slurred is True
+        assert second.slurred is False
+        assert first.duration == 2  # half note
+        assert second.duration == 8  # followed by eighth note
+
+    def test_triplet_feel_quantizes_triplet_eighths(self):
+        """Triplet feel produces twelfth-note durations."""
+        session = TranscribeSession(default_tempo=120.0, feel="triplet")
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.1667)
+        ]
+        seq = session._notes_to_seq()
+        assert isinstance(seq.elements[0], Note)
+        assert seq.elements[0].duration == 12
+
+    def test_quintuplet_feel_quantizes(self):
+        """Quintuplet feel produces twentieth-note durations."""
+        session = TranscribeSession(default_tempo=120.0, feel="quintuplet")
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.1)
+        ]
+        seq = session._notes_to_seq()
+        assert isinstance(seq.elements[0], Note)
+        assert seq.elements[0].duration == 20
+
+    def test_swing_feel_alternates_ratios(self):
+        """Swing feel alternates long/short subdivisions."""
+        session = TranscribeSession(default_tempo=120.0, feel="swing")
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.25),
+            RecordedNote(pitch=62, velocity=100, start_time=0.25, duration=0.25),
+        ]
+        seq = session._notes_to_seq()
+        assert isinstance(seq.elements[0], Note)
+        assert seq.elements[0].duration == 6  # two-thirds beat
+        assert isinstance(seq.elements[1], Note)
+        assert seq.elements[1].duration == 12  # one-third beat
+
+    def test_seq_metadata_includes_feel(self):
+        """Seq metadata exposes feel and swing ratio."""
+        session = TranscribeSession(default_tempo=120.0, feel="swing", swing_ratio=0.62)
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.25)
+        ]
+        seq = session._notes_to_seq()
+        assert seq.metadata["feel"] == "swing"
+        assert seq.metadata["swing_ratio"] == pytest.approx(0.62)
+
+    def test_seq_metadata_includes_tuplet_division(self):
+        """Tuplet feels record their division."""
+        session = TranscribeSession(default_tempo=120.0, feel="quintuplet")
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.1)
+        ]
+        seq = session._notes_to_seq()
+        assert seq.metadata["feel"] == "quintuplet"
+        assert seq.metadata["tuplet_division"] == 5
+
+    def test_triplet_sequences_collapsed_to_cram(self):
+        """Triplet subdivisions are wrapped in cram expressions."""
+        session = TranscribeSession(default_tempo=120.0, feel="triplet")
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=0.1667),
+            RecordedNote(pitch=62, velocity=100, start_time=0.1667, duration=0.1667),
+            RecordedNote(pitch=64, velocity=100, start_time=0.3334, duration=0.1667),
+        ]
+        seq = session._notes_to_seq()
+        assert isinstance(seq.elements[0], Cram)
+        assert seq.elements[0].duration == 4
+        assert len(seq.elements[0].elements) == 3
+
+    def test_quintuplet_sequences_collapsed(self):
+        """Quintuplet subdivisions collapse into cram expressions."""
+        session = TranscribeSession(default_tempo=120.0, feel="quintuplet")
+        base = 0.1
+        session._recorded_notes = [
+            RecordedNote(pitch=60 + i, velocity=100, start_time=i * base, duration=base)
+            for i in range(5)
+        ]
+        seq = session._notes_to_seq()
+        assert isinstance(seq.elements[0], Cram)
+        assert len(seq.elements[0].elements) == 5
+
+    def test_chord_tuplets_form_cram_chords(self):
+        """Simultaneous notes stay as chords inside cram expressions."""
+        session = TranscribeSession(default_tempo=120.0, feel="triplet")
+        base = 0.1667
+        session._recorded_notes = [
+            RecordedNote(pitch=60, velocity=100, start_time=0.0, duration=base),
+            RecordedNote(pitch=64, velocity=100, start_time=0.0, duration=base),
+            RecordedNote(pitch=67, velocity=100, start_time=0.0, duration=base),
+            RecordedNote(pitch=60, velocity=100, start_time=base, duration=base),
+            RecordedNote(pitch=64, velocity=100, start_time=base, duration=base),
+            RecordedNote(pitch=67, velocity=100, start_time=base, duration=base),
+            RecordedNote(pitch=60, velocity=100, start_time=base * 2, duration=base),
+            RecordedNote(pitch=64, velocity=100, start_time=base * 2, duration=base),
+            RecordedNote(pitch=67, velocity=100, start_time=base * 2, duration=base),
+        ]
+        seq = session._notes_to_seq()
+        assert isinstance(seq.elements[0], Cram)
+        assert all(isinstance(elem, Chord) for elem in seq.elements[0].elements)
 
     def test_note_on_off_tracking(self):
         """Note on/off events are tracked correctly."""
@@ -200,6 +291,13 @@ class TestRecordedNote:
 # =============================================================================
 
 
+try:
+    import aldakit._libremidi as _libremidi  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - depends on build features
+    _libremidi = None
+
+
+@pytest.mark.skipif(_libremidi is None, reason="libremidi extension not available")
 class TestMidiInBindings:
     """Tests for MidiIn C++ bindings."""
 
@@ -234,6 +332,7 @@ class TestMidiInBindings:
         assert not midi_in.is_port_open()
 
 
+@pytest.mark.skipif(_libremidi is None, reason="libremidi extension not available")
 class TestMidiMessage:
     """Tests for MidiMessage binding."""
 

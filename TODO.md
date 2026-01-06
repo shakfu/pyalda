@@ -2,20 +2,26 @@
 
 ## Future Features
 
-### MIDI Input Support
-Add MIDI input functionality to translate incoming MIDI messages to Alda syntax. This would enable:
-- Real-time transcription from MIDI keyboards
-- Recording MIDI performances as Alda code
-- Interactive composition workflows
+### Transcription Expressiveness
 
-Reference: The original comprehensive libremidi Python bindings are available at `thirdparty/libremidi/bindings/python/` and include `MidiIn` support with polling wrappers.
+- [x] Implemented real-time ties, swing/triplet/quintuplet quantization, and per-track tempo events.
+- [x] Surface tuplets and swing metadata back through the compose API so callers can tweak ratios post-recording.
+- [x] Teach the quantizer how to collapse tied tuplets into `{ ... }` cram expressions for denser notation.
+- [x] Extend chord transcription so block chords inherit ties/tuplets rather than reverting to the nearest straight duration.
+
+### CLI & UX Enhancements
+
+Improve ergonomics for live workflows:
+- [x] Added regression tests that execute key CLI paths (stdin streaming, version flag) with mocked backends.
+- [ ] Provide `--monitor` and `--metronome` helpers when transcribing to keep performers on grid.
 
 ### Conditional Full Bindings
-The current `_libremidi` extension is minimal (output-only). Could add conditional build logic to detect optional dependencies and build full bindings when available:
+
+The bundled `_libremidi` extension defaults to the minimal feature set. Add conditional build logic to detect optional dependencies and enable the richer polling/observer APIs when available:
 
 - Check for `boost` and `readerwriterqueue` availability in CMake
 - On macOS: `brew install boost readerwriterqueue`
 - Define `LIBREMIDI_FULL_BINDINGS` preprocessor macro when deps found
 - Use `#ifdef` in `_libremidi.cpp` to conditionally compile full vs minimal bindings
 
-This would give users the option to install deps for advanced features (polling wrappers, MIDI input) while keeping zero-dependency builds working.
+This keeps zero-dependency wheels lean, yet unlocks responsive MIDI I/O for contributors who install the optional toolchain.

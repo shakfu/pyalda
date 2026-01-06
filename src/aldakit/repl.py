@@ -232,7 +232,7 @@ def run_repl(port_name: str | None = None, verbose: bool = False) -> int:
     # State
     default_tempo = 120
 
-    print("aldakit REPL - AldaPyMIDI port open")
+    print("aldakit REPL - AldakitMIDI port open")
     print("Enter alda code, press Enter to play. Alt+Enter for multi-line.")
     print("Type :help for commands, Ctrl+D to exit.")
     print()
@@ -278,7 +278,7 @@ def run_repl(port_name: str | None = None, verbose: bool = False) -> int:
                         for i, p in enumerate(ports):
                             print(f"  {i}: {p}")
                     else:
-                        print("  (no ports - using virtual AldaPyMIDI)")
+                        print("  (no ports - using virtual AldakitMIDI)")
                 elif cmd == "instruments":
                     insts = sorted(INSTRUMENT_PROGRAMS.keys())
                     # Print in columns

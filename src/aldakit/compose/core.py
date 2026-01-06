@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .base import ComposeElement
 
@@ -279,6 +279,7 @@ class Chord(ComposeElement):
 
     notes: tuple[Note, ...] = field(default_factory=tuple)
     duration: int | None = None
+    dots: int = 0
 
     def to_ast(self) -> ChordNode:
         """Convert to AST ChordNode."""
@@ -286,8 +287,9 @@ class Chord(ComposeElement):
         note_asts = []
         for i, n in enumerate(self.notes):
             if i == 0 and self.duration is not None:
-                # Apply duration to first note only (Alda convention)
                 modified_note = n.with_duration(self.duration)
+                if self.dots:
+                    modified_note = modified_note.with_dots(self.dots)
                 note_asts.append(modified_note.to_ast())
             else:
                 note_asts.append(n.to_ast())
@@ -300,6 +302,8 @@ class Chord(ComposeElement):
         for i, n in enumerate(self.notes):
             if i == 0 and self.duration is not None:
                 modified_note = n.with_duration(self.duration)
+                if self.dots:
+                    modified_note = modified_note.with_dots(self.dots)
                 parts.append(modified_note.to_alda())
             else:
                 # Subsequent notes don't repeat duration
@@ -318,6 +322,7 @@ class Seq(ComposeElement):
     """
 
     elements: list[ComposeElement] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_ast(self) -> EventSequenceNode:
         """Convert to AST EventSequenceNode."""
@@ -355,7 +360,12 @@ class Seq(ComposeElement):
     def __add__(self, other: Seq) -> Seq:
         """Concatenate two sequences."""
         if isinstance(other, Seq):
-            return Seq(elements=list(self.elements) + list(other.elements))
+            merged = dict(self.metadata)
+            for key, value in other.metadata.items():
+                merged.setdefault(key, value)
+            return Seq(
+                elements=list(self.elements) + list(other.elements), metadata=merged
+            )
         return NotImplemented
 
 
@@ -369,6 +379,7 @@ class _ParsedSeq(Seq):
     ast: object = None  # RootNode
     source: str = ""
     elements: list[ComposeElement] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_ast(self) -> EventSequenceNode:
         """Return the parsed AST."""
@@ -482,12 +493,15 @@ def rest(
     return Rest(duration=duration, dots=dots, ms=ms, seconds=seconds)
 
 
-def chord(*notes_or_pitches: Note | str, duration: int | None = None) -> Chord:
+def chord(
+    *notes_or_pitches: Note | str, duration: int | None = None, dots: int = 0
+) -> Chord:
     """Create a chord.
 
     Args:
         *notes_or_pitches: Note objects or pitch strings.
         duration: Chord duration (applied to first note).
+        dots: Number of dots to apply to the chord duration.
 
     Returns:
         Chord element.
@@ -501,19 +515,20 @@ def chord(*notes_or_pitches: Note | str, duration: int | None = None) -> Chord:
         else:
             raise TypeError(f"Expected Note or str, got {type(item)}")
 
-    return Chord(notes=tuple(notes), duration=duration)
+    return Chord(notes=tuple(notes), duration=duration, dots=dots)
 
 
-def seq(*elements: ComposeElement) -> Seq:
+def seq(*elements: ComposeElement, metadata: dict[str, Any] | None = None) -> Seq:
     """Create a sequence.
 
     Args:
         *elements: Compose elements to include in the sequence.
+        metadata: Optional metadata dictionary for timing/annotations.
 
     Returns:
         Seq element.
     """
-    return Seq(elements=list(elements))
+    return Seq(elements=list(elements), metadata=dict(metadata or {}))
 
 
 # =============================================================================

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Callable, Literal
 
 from .._libremidi import (  # type: ignore[import-not-found]
     MidiIn,
@@ -12,13 +12,34 @@ from .._libremidi import (  # type: ignore[import-not-found]
     Observer,
 )
 from ..compose.attributes import Tempo
-from ..compose.core import Note, Rest, Seq
+from ..compose.core import Note, Rest, Seq, Cram, Chord
 from ..compose.part import Part
 from ..score import Score
-from .midi_to_ast import midi_pitch_to_note
+from .midi_to_ast import (
+    beats_to_duration,
+    duration_value_to_beats,
+    midi_pitch_to_note,
+)
 
 if TYPE_CHECKING:
     from ..score import Score
+
+# -----------------------------------------------------------------------------
+# Transcription timing constants
+# -----------------------------------------------------------------------------
+
+# Maximum time difference (seconds) for notes to be grouped into a chord.
+# Notes starting within this window are considered simultaneous.
+CHORD_GROUPING_TOLERANCE_SECONDS = 0.002
+
+# Minimum gap (seconds) between notes before inserting a rest.
+# Gaps smaller than this are absorbed into the preceding note.
+MIN_REST_GAP_SECONDS = 0.05
+
+# Swing detection range (beats). Notes with durations in this range
+# are candidates for swing quantization (long/short alternation).
+SWING_DETECTION_MIN_BEATS = 0.15
+SWING_DETECTION_MAX_BEATS = 0.85
 
 
 @dataclass
@@ -58,6 +79,8 @@ class TranscribeSession:
     port_name: str | None = None
     quantize_grid: float = 0.25  # Quantize to 16th notes
     default_tempo: float = 120.0
+    feel: Literal["straight", "swing", "triplet", "quintuplet"] = "straight"
+    swing_ratio: float = 2.0 / 3.0  # Portion of beat for the long swing note
 
     # Internal state
     _midi_in: MidiIn | None = field(default=None, repr=False)
@@ -66,6 +89,7 @@ class TranscribeSession:
     _start_time: float = field(default=0.0, repr=False)
     _running: bool = field(default=False, repr=False)
     _on_note: Callable[[int, int, bool], None] | None = field(default=None, repr=False)
+    _swing_next_is_long: bool = field(default=True, repr=False)
 
     def list_input_ports(self) -> list[str]:
         """List available MIDI input ports."""
@@ -111,6 +135,7 @@ class TranscribeSession:
         self._recorded_notes = []
         self._start_time = time.time()
         self._running = True
+        self._swing_next_is_long = True
 
     def stop(self) -> Seq:
         """Stop recording and return the recorded notes as a Seq.
@@ -141,6 +166,7 @@ class TranscribeSession:
         if self._midi_in:
             self._midi_in.close_port()
             self._midi_in = None
+        self._swing_next_is_long = True
 
         # Convert recorded notes to Seq
         return self._notes_to_seq()
@@ -218,70 +244,255 @@ class TranscribeSession:
         if not self._recorded_notes:
             return Seq()
 
-        # Sort by start time
-        notes = sorted(self._recorded_notes, key=lambda n: n.start_time)
-
-        # Convert to compose elements
-        elements = []
+        sorted_notes = sorted(self._recorded_notes, key=lambda n: n.start_time)
+        groups = self._group_notes(sorted_notes)
+        elements: list = []
         current_time = 0.0
 
+        for group in groups:
+            start_time = group[0].start_time
+            gap_seconds = start_time - current_time
+            if gap_seconds > MIN_REST_GAP_SECONDS:
+                gap_beats = self._seconds_to_beats(gap_seconds)
+                rest_segments = self._segments_for_beats(gap_beats, kind="rest")
+                gained = self._append_rest_segments(rest_segments, elements)
+                current_time += self._beats_to_seconds(gained)
+
+            duration_seconds = max(n.duration for n in group)
+            duration_beats = self._seconds_to_beats(duration_seconds)
+            note_segments = self._segments_for_beats(duration_beats, kind="note")
+            if not note_segments:
+                continue
+
+            gained = self._append_group_segments(group, note_segments, elements)
+            current_time = start_time + duration_seconds
+
+        metadata: dict[str, object] = {
+            "feel": self.feel,
+            "quantize_grid": self.quantize_grid,
+        }
+        if self.feel == "swing":
+            metadata["swing_ratio"] = self.swing_ratio
+        elif self.feel == "triplet":
+            metadata["tuplet_division"] = 3
+        elif self.feel == "quintuplet":
+            metadata["tuplet_division"] = 5
+
+        collapsed_elements = self._collapse_tuplets(elements, metadata)
+        return Seq(elements=collapsed_elements, metadata=metadata)
+
+    def _group_notes(self, notes: list[RecordedNote]) -> list[list[RecordedNote]]:
+        groups: list[list[RecordedNote]] = []
+        current_group: list[RecordedNote] = []
+        current_start: float | None = None
+
         for note in notes:
-            # Insert rest if there's a gap
-            gap = note.start_time - current_time
-            if gap > 0.1:  # Only insert rest for gaps > 100ms
-                rest_duration = self._seconds_to_duration(gap)
-                if rest_duration:
-                    elements.append(Rest(duration=rest_duration))
+            if (
+                current_group
+                and current_start is not None
+                and abs(note.start_time - current_start)
+                > CHORD_GROUPING_TOLERANCE_SECONDS
+            ):
+                groups.append(current_group)
+                current_group = []
+                current_start = None
 
-            # Convert pitch to note
-            letter, octave, accidentals = midi_pitch_to_note(note.pitch)
-            accidental = accidentals[0] if accidentals else None
-            note_duration = self._seconds_to_duration(note.duration)
+            if not current_group:
+                current_start = note.start_time
+            current_group.append(note)
 
-            elements.append(
-                Note(
-                    pitch=letter,
-                    duration=note_duration,
-                    octave=octave,
-                    accidental=accidental,
+        if current_group:
+            groups.append(current_group)
+
+        return groups
+
+    def _seconds_to_beats(self, seconds: float) -> float:
+        return seconds * self.default_tempo / 60.0
+
+    def _beats_to_seconds(self, beats: float) -> float:
+        return beats * 60.0 / self.default_tempo
+
+    def _grid_value(self) -> float:
+        if self.feel == "triplet":
+            return 1.0 / 3.0
+        if self.feel == "quintuplet":
+            return 0.2
+        return self.quantize_grid
+
+    def _quantize_beats(self, beats: float, *, kind: str) -> float:
+        beats = max(beats, 0.0)
+        grid = self._grid_value()
+
+        if kind == "note" and self.feel == "swing":
+            if SWING_DETECTION_MIN_BEATS < beats < SWING_DETECTION_MAX_BEATS:
+                long = max(0.0, min(1.0, self.swing_ratio))
+                short = max(0.0, 1.0 - long)
+                target = long if self._swing_next_is_long else short
+                self._swing_next_is_long = not self._swing_next_is_long
+                return target
+            self._swing_next_is_long = True
+
+        if grid > 0:
+            return round(beats / grid) * grid
+        return beats
+
+    def _segments_for_beats(
+        self, beats: float, *, kind: str
+    ) -> list[tuple[int, int, float]]:
+        quantized = self._quantize_beats(beats, kind=kind)
+        return self._segment_beats(max(quantized, 0.0))
+
+    def _segment_beats(self, beats: float) -> list[tuple[int, int, float]]:
+        segments: list[tuple[int, int, float]] = []
+        remaining = beats
+        grid = self._grid_value()
+        tolerance = max(grid / 16.0 if grid else 0.005, 0.005)
+
+        while remaining > tolerance:
+            denom, dots = beats_to_duration(remaining)
+            length = duration_value_to_beats(denom, dots)
+            if length <= 0:
+                break
+            segments.append((denom, dots, length))
+            remaining = max(0.0, remaining - length)
+
+        return segments
+
+    def _append_rest_segments(
+        self, segments: list[tuple[int, int, float]], elements: list
+    ) -> float:
+        total = 0.0
+        for denom, dots, length in segments:
+            elements.append(Rest(duration=denom, dots=dots))
+            total += length
+        return total
+
+    def _append_group_segments(
+        self,
+        group: list[RecordedNote],
+        segments: list[tuple[int, int, float]],
+        elements: list,
+    ) -> float:
+        total = 0.0
+        is_chord = len(group) > 1
+        note_infos = [
+            midi_pitch_to_note(note.pitch) for note in group
+        ]  # (letter, octave, accidentals)
+
+        for idx, (denom, dots, length) in enumerate(segments):
+            slur = idx < len(segments) - 1
+            if is_chord:
+                chord_notes = []
+                for letter, octave, accidentals in note_infos:
+                    accidental = accidentals[0] if accidentals else None
+                    chord_notes.append(
+                        Note(
+                            pitch=letter,
+                            duration=None,
+                            dots=0,
+                            octave=octave,
+                            accidental=accidental,
+                            slurred=slur,
+                        )
+                    )
+                elements.append(
+                    Chord(
+                        notes=tuple(chord_notes),
+                        duration=denom,
+                        dots=dots,
+                    )
                 )
+            else:
+                letter, octave, accidentals = note_infos[0]
+                accidental = accidentals[0] if accidentals else None
+                elements.append(
+                    Note(
+                        pitch=letter,
+                        duration=denom,
+                        dots=dots,
+                        octave=octave,
+                        accidental=accidental,
+                        slurred=slur,
+                    )
+                )
+            total += length
+
+        return total
+
+    def _collapse_tuplets(self, elements: list, metadata: dict[str, object]) -> list:
+        raw_division = metadata.get("tuplet_division")
+        if not isinstance(raw_division, int):
+            return elements
+
+        if raw_division <= 1:
+            return elements
+
+        division = raw_division
+
+        target_beats = 1.0 / division
+        tolerance = target_beats / 8.0
+
+        new_elements: list = []
+        buffer: list = []
+        buffer_beats = 0.0
+
+        def flush_buffer() -> None:
+            nonlocal buffer, buffer_beats
+            if buffer:
+                new_elements.extend(buffer)
+            buffer = []
+            buffer_beats = 0.0
+
+        for elem in elements:
+            beats = self._element_beats(elem)
+            if beats is None or abs(beats - target_beats) > tolerance:
+                flush_buffer()
+                new_elements.append(elem)
+                continue
+
+            buffer.append(self._strip_slur(elem))
+            buffer_beats += beats
+
+            if len(buffer) == division:
+                base_duration, base_dots = beats_to_duration(division * target_beats)
+                if abs(buffer_beats - division * target_beats) <= tolerance * division:
+                    new_elements.append(
+                        Cram(
+                            elements=list(buffer),
+                            duration=base_duration,
+                            dots=base_dots,
+                        )
+                    )
+                else:
+                    new_elements.extend(buffer)
+                buffer = []
+                buffer_beats = 0.0
+
+        flush_buffer()
+        return new_elements
+
+    def _element_beats(self, element) -> float | None:
+        if isinstance(element, Note) and element.duration is not None:
+            return duration_value_to_beats(element.duration, element.dots)
+        if isinstance(element, Rest) and element.duration is not None:
+            return duration_value_to_beats(element.duration, element.dots)
+        if isinstance(element, Chord) and element.duration is not None:
+            return duration_value_to_beats(
+                element.duration, getattr(element, "dots", 0)
             )
-            current_time = note.start_time + note.duration
+        return None
 
-        return Seq(elements=elements)
-
-    def _seconds_to_duration(self, seconds: float) -> int | None:
-        """Convert seconds to the closest standard duration value."""
-        # At default tempo (120 BPM), one beat = 0.5 seconds
-        beats = seconds * self.default_tempo / 60.0
-
-        # Quantize to grid
-        if self.quantize_grid > 0:
-            beats = round(beats / self.quantize_grid) * self.quantize_grid
-
-        # Standard durations: 1=whole, 2=half, 4=quarter, 8=eighth, 16=sixteenth
-        duration_map = [
-            (4.0, 1),  # whole note
-            (2.0, 2),  # half note
-            (1.5, 4),  # dotted quarter (approximate as quarter)
-            (1.0, 4),  # quarter note
-            (0.75, 8),  # dotted eighth (approximate as eighth)
-            (0.5, 8),  # eighth note
-            (0.25, 16),  # sixteenth note
-            (0.125, 32),  # thirty-second note
-        ]
-
-        # Find closest match
-        best_duration = 4  # Default to quarter note
-        best_diff = float("inf")
-
-        for length, duration in duration_map:
-            diff = abs(beats - length)
-            if diff < best_diff:
-                best_diff = diff
-                best_duration = duration
-
-        return best_duration
+    @staticmethod
+    def _strip_slur(element):
+        if isinstance(element, Note) and element.slurred:
+            return replace(element, slurred=False)
+        if isinstance(element, Chord):
+            stripped_notes = [
+                replace(note, slurred=False) if note.slurred else note
+                for note in element.notes
+            ]
+            return replace(element, notes=tuple(stripped_notes))
+        return element
 
     def on_note(self, callback: Callable[[int, int, bool], None]) -> None:
         """Set a callback for note events.
@@ -297,6 +508,8 @@ def transcribe(
     instrument: str = "piano",
     quantize_grid: float = 0.25,
     tempo: float = 120.0,
+    feel: Literal["straight", "swing", "triplet", "quintuplet"] = "straight",
+    swing_ratio: float = 2.0 / 3.0,
     on_note: Callable[[int, int, bool], None] | None = None,
     poll_interval: float = 0.01,
 ) -> "Score":  # noqa: F821
@@ -310,6 +523,8 @@ def transcribe(
         instrument: Instrument name for the part.
         quantize_grid: Grid size in beats for quantization (0.25 = 16th notes).
         tempo: Tempo in BPM for duration calculations.
+        feel: Quantization feel ("straight", "swing", "triplet", "quintuplet").
+        swing_ratio: Portion of the beat allocated to the long swing note.
         on_note: Optional callback for note events (pitch, velocity, is_note_on).
         poll_interval: How often to poll for MIDI messages (seconds).
 
@@ -327,6 +542,8 @@ def transcribe(
         port_name=port_name,
         quantize_grid=quantize_grid,
         default_tempo=tempo,
+        feel=feel,
+        swing_ratio=swing_ratio,
     )
 
     if on_note:

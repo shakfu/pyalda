@@ -103,19 +103,17 @@ class TestScore:
 
         mock_backend_class.assert_called_once_with(port_name="TestPort")
 
+    @patch("aldakit.score.write_midi_file")
     @patch("aldakit.score.LibremidiBackend")
-    def test_save(self, mock_backend_class):
-        mock_backend = MagicMock()
-        mock_backend_class.return_value = mock_backend
-
+    def test_save(self, mock_backend_class, mock_write):
         score = Score("piano: c d e")
         score.save("output.mid")
 
-        mock_backend.save.assert_called_once()
-        call_args = mock_backend.save.call_args
+        mock_backend_class.assert_not_called()
+        mock_write.assert_called_once()
         from pathlib import Path
 
-        assert call_args[0][1] == Path("output.mid")
+        assert mock_write.call_args[0][1] == Path("output.mid")
 
 
 class TestModuleFunctions:

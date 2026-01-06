@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import generate_midi, parse
+from . import __version__, generate_midi, parse
 from .errors import AldaParseError
 from .midi import LibremidiBackend
 
@@ -20,7 +20,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -43,15 +43,21 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     # ports subcommand
-    subparsers.add_parser(
+    ports_parser = subparsers.add_parser(
         "ports",
-        help="List available MIDI output ports",
+        help="List available MIDI ports",
     )
-
-    # input-ports subcommand
-    subparsers.add_parser(
-        "input-ports",
-        help="List available MIDI input ports",
+    ports_parser.add_argument(
+        "-i",
+        "--inputs",
+        action="store_true",
+        help="List only MIDI input ports",
+    )
+    ports_parser.add_argument(
+        "-o",
+        "--outputs",
+        action="store_true",
+        help="List only MIDI output ports",
     )
 
     # transcribe subcommand
@@ -91,6 +97,19 @@ def create_parser() -> argparse.ArgumentParser:
         help="Quantize grid in beats (default: 0.25 = 16th notes)",
     )
     transcribe_parser.add_argument(
+        "--feel",
+        choices=["straight", "swing", "triplet", "quintuplet"],
+        default="straight",
+        help="Timing feel for quantization (default: straight)",
+    )
+    transcribe_parser.add_argument(
+        "--swing-ratio",
+        type=float,
+        default=2.0 / 3.0,
+        metavar="RATIO",
+        help="Swing ratio for long vs short notes (default: 0.666...)",
+    )
+    transcribe_parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -100,7 +119,7 @@ def create_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument(
         "--port",
         metavar="NAME",
-        help="MIDI input port name",
+        help="MIDI input port name or index (see 'aldakit ports')",
     )
     transcribe_parser.add_argument(
         "--play",
@@ -159,7 +178,7 @@ def _add_play_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--port",
         metavar="NAME",
-        help="MIDI output port name",
+        help="MIDI output port name or index (see 'aldakit ports')",
     )
 
     parser.add_argument(
@@ -188,39 +207,49 @@ def _add_play_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def list_ports() -> None:
-    """List available MIDI output ports."""
-    backend = LibremidiBackend()
-    ports = backend.list_output_ports()
+def list_ports(show_inputs: bool = True, show_outputs: bool = True) -> None:
+    """List available MIDI ports."""
+    if show_outputs:
+        backend = LibremidiBackend()
+        ports = backend.list_output_ports()
+        if ports:
+            print("Available MIDI output ports:")
+            for i, port in enumerate(ports):
+                print(f"  {i}: {port}")
+        else:
+            print("No MIDI output ports available.")
+            print(
+                "You may need to start a software synthesizer or connect a MIDI device."
+            )
+        if show_inputs:
+            print()
 
-    if ports:
-        print("Available MIDI output ports:")
-        for i, port in enumerate(ports):
-            print(f"  {i}: {port}")
-    else:
-        print("No MIDI output ports available.")
-        print("You may need to start a software synthesizer or connect a MIDI device.")
+    if show_inputs:
+        from .midi.transcriber import list_input_ports as get_input_ports
 
+        ports = get_input_ports()
 
-def list_input_ports() -> None:
-    """List available MIDI input ports."""
-    from .midi.transcriber import list_input_ports as get_input_ports
-
-    ports = get_input_ports()
-
-    if ports:
-        print("Available MIDI input ports:")
-        for i, port in enumerate(ports):
-            print(f"  {i}: {port}")
-    else:
-        print("No MIDI input ports available.")
-        print("You may need to connect a MIDI keyboard or controller.")
+        if ports:
+            print("Available MIDI input ports:")
+            for i, port in enumerate(ports):
+                print(f"  {i}: {port}")
+        else:
+            print("No MIDI input ports available.")
+            print("You may need to connect a MIDI keyboard or controller.")
 
 
 def transcribe_command(args: argparse.Namespace) -> int:
     """Record MIDI input and output Alda code."""
     from .midi.midi_to_ast import midi_pitch_to_note
     from .midi.transcriber import transcribe
+
+    # Validate swing ratio
+    if not 0 < args.swing_ratio < 1:
+        print(
+            "Error: --swing-ratio must be between 0 and 1 (exclusive).",
+            file=sys.stderr,
+        )
+        return 1
 
     NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -248,12 +277,19 @@ def transcribe_command(args: argparse.Namespace) -> int:
     print(file=sys.stderr, flush=True)
 
     try:
+        # Resolve port specifier (can be index like "0" or name)
+        port_name, ok = _resolve_input_port(args.port)
+        if not ok:
+            return 1
+
         score = transcribe(
             duration=args.duration,
-            port_name=args.port,
+            port_name=port_name,
             instrument=args.instrument,
             quantize_grid=args.quantize,
             tempo=args.tempo,
+            feel=args.feel,
+            swing_ratio=args.swing_ratio,
             on_note=on_note if args.verbose else None,
         )
     except RuntimeError as e:
@@ -281,48 +317,54 @@ def transcribe_command(args: argparse.Namespace) -> int:
 
 def stdin_mode(port_name: str | None, verbose: bool) -> int:
     """Read alda code from stdin, blank line to play."""
-    backend = LibremidiBackend(port_name=port_name)
-    backend._ensure_port_open()
+    if port_name:
+        print(
+            f"Using MIDI output port '{port_name}'. Paste Alda code, blank line twice to play. Ctrl+C to exit."
+        )
+    else:
+        print(
+            "Opening AldakitMIDI port... Paste Alda code, blank line twice to play. Ctrl+C to exit."
+        )
 
-    print("AldaPyMIDI port open. Paste alda code, blank line to play. Ctrl+C to exit.")
+    with LibremidiBackend(port_name=port_name) as backend:
+        try:
+            while True:
+                lines = []
+                try:
+                    while True:
+                        line = input()
+                        if line == "" and lines and lines[-1] == "":
+                            break
+                        lines.append(line)
+                except EOFError:
+                    break
 
-    try:
-        while True:
-            lines = []
-            try:
-                while True:
-                    line = input()
-                    if line == "" and lines and lines[-1] == "":
-                        break
-                    lines.append(line)
-            except EOFError:
-                break
-
-            source = "\n".join(lines).strip()
-            if not source:
-                continue
-
-            try:
-                ast = parse(source, "<stdin>")
-                sequence = generate_midi(ast)
-
-                if not sequence.notes:
-                    print("(no notes)")
+                source = "\n".join(lines).strip()
+                if not source:
                     continue
 
-                if verbose:
-                    print(f"Playing {len(sequence.notes)} notes...", file=sys.stderr)
+                try:
+                    ast = parse(source, "<stdin>")
+                    sequence = generate_midi(ast)
 
-                backend.play(sequence)
-                while backend.is_playing():
-                    time.sleep(0.1)
+                    if not sequence.notes:
+                        print("(no notes)")
+                        continue
 
-            except AldaParseError as e:
-                print(f"Parse error: {e}", file=sys.stderr)
+                    if verbose:
+                        print(
+                            f"Playing {len(sequence.notes)} notes...", file=sys.stderr
+                        )
 
-    except KeyboardInterrupt:
-        print()
-        backend.close()
+                    backend.play(sequence)
+                    while backend.is_playing():
+                        time.sleep(0.1)
+
+                except AldaParseError as e:
+                    print(f"Parse error: {e}", file=sys.stderr)
+
+        except KeyboardInterrupt:
+            print()
 
     return 0
 
@@ -353,6 +395,75 @@ def read_source(args: argparse.Namespace) -> tuple[str, str]:
     return args.file.read_text(), str(args.file)
 
 
+def _resolve_port_specifier(
+    specifier: str | None, ports: list[str], kind: str
+) -> tuple[str | None, bool]:
+    """Resolve a port specifier (index or name) to an actual port name.
+
+    Args:
+        specifier: Port index (e.g., "0") or name/partial name.
+        ports: List of available port names.
+        kind: "input" or "output" for error messages.
+
+    Returns:
+        Tuple of (resolved_port_name, success). On failure, prints an error.
+    """
+    if specifier is None:
+        return None, True
+
+    # Check if specifier is a numeric index
+    if specifier.isdigit():
+        idx = int(specifier)
+        if 0 <= idx < len(ports):
+            return ports[idx], True
+        print(
+            f"Error: Port index {idx} out of range. "
+            f"Use 'aldakit ports' to see available {kind} ports.",
+            file=sys.stderr,
+        )
+        return None, False
+
+    # Otherwise treat as name (backend will handle partial matching)
+    return specifier, True
+
+
+def _resolve_output_port(port_specifier: str | None) -> tuple[str | None, bool]:
+    """Resolve output port specifier (index or name) to port name.
+
+    If no port is specified and exactly one output port exists, it is
+    auto-selected for convenience.
+    """
+    backend = LibremidiBackend()
+    ports = backend.list_output_ports()
+
+    if port_specifier is None:
+        # Auto-select if exactly one port available
+        if len(ports) == 1:
+            return ports[0], True
+        return None, True
+
+    return _resolve_port_specifier(port_specifier, ports, "output")
+
+
+def _resolve_input_port(port_specifier: str | None) -> tuple[str | None, bool]:
+    """Resolve input port specifier (index or name) to port name.
+
+    If no port is specified and exactly one input port exists, it is
+    auto-selected for convenience.
+    """
+    from .midi.transcriber import list_input_ports as get_input_ports
+
+    ports = get_input_ports()
+
+    if port_specifier is None:
+        # Auto-select if exactly one port available
+        if len(ports) == 1:
+            return ports[0], True
+        return None, True
+
+    return _resolve_port_specifier(port_specifier, ports, "input")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entry point for the CLI."""
     parser = create_parser()
@@ -362,18 +473,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "repl":
         from .repl import run_repl
 
-        return run_repl(args.port, args.verbose)
+        port, ok = _resolve_output_port(args.port)
+        if not ok:
+            return 1
+        return run_repl(port, args.verbose)
 
     if args.command == "ports":
-        list_ports()
-        return 0
-
-    if args.command == "input-ports":
-        list_input_ports()
+        show_inputs = args.inputs or not args.outputs
+        show_outputs = args.outputs or not args.inputs
+        list_ports(show_inputs=show_inputs, show_outputs=show_outputs)
         return 0
 
     if args.command == "transcribe":
         return transcribe_command(args)
+
+    # Resolve port specifier early (can be index like "0" or name)
+    port, ok = _resolve_output_port(args.port)
+    if not ok:
+        return 1
+    args.port = port
 
     # Handle play subcommand or default behavior
     # Handle --stdin

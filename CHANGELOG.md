@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5]
+
+### Added
+
+- **Transcription expressiveness**
+  - Real-time transcribe now supports swing, triplet, and quintuplet feels with true ties and dotted durations.
+  - Tuplet groups (including block chords) collapse into `{ ... }` cram expressions instead of long tie chains.
+  - Chord transcription preserves ties/tuplets so block chords inherit the same rhythmic structure as monophonic lines.
+  - Per-recording metadata (feel, swing ratio, tuplet division) is surfaced via `Seq.metadata` for downstream tweaking.
+  - CLI `transcribe` command exposes `--feel` and `--swing-ratio` flags; transcription tuples populate the metadata.
+  - MIDI import emits in-part tempo changes whenever `MidiTempoChange` events appear after the initial tempo.
+- **CLI improvements**
+  - `aldakit ports` now lists both output and input ports by default, with `-o/--outputs` or `-i/--inputs` filtering as needed.
+  - `--port` accepts both port names and numeric indices (e.g., `--port 0` uses the first port from `aldakit ports`).
+  - Single-port auto-selection: when only one MIDI port is available, it is automatically selected without requiring `--port`.
+
+### Changed
+
+- `Score.save()` writes `.mid` files directly via the SMF writer, dropping the libremidi dependency for exports.
+- `Seq` now carries an optional metadata dictionary that concatenation preserves; `seq(..., metadata=...)` helper added.
+- `Chord` objects support dotted durations so tuplets and other rhythmic transforms can express chords without losing dots.
+- CLI stdin mode and version flag use `aldakit.__version__` and context-managed backends to avoid leaked ports.
+- Transcription timing constants extracted as named module-level constants for clarity and tuning.
+
+### Fixed
+
+- `beat_to_duration` now handles pytest `approx` inputs and the expanded duration catalog adds triplet/quintuplet denominators.
+- Libremidi-dependent tests are skipped automatically when the native extension is unavailable.
+- CLI validates `--swing-ratio` is in range (0, 1) before transcription.
+
 ## [0.1.4]
 
 ### Added
