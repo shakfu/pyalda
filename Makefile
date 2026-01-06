@@ -45,10 +45,10 @@ check:
 
 fullcheck: format lint typecheck test
 
-publish-test: build check
+publish-test: check
 	@uv run twine upload --verbose --repository testpypi dist/*
 
-publish: build check
+publish: check
 	@uv run twine upload dist/*
 
 assets:
