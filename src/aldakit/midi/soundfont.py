@@ -10,6 +10,7 @@ import hashlib
 import shutil
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 # Default SoundFont directory
@@ -62,7 +63,7 @@ def list_available_downloads() -> dict[str, dict]:
 def download_soundfont(
     name: str = DEFAULT_SOUNDFONT,
     target_dir: Path | None = None,
-    progress_callback: callable | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
     force: bool = False,
 ) -> Path:
     """Download a SoundFont file.
@@ -87,13 +88,14 @@ def download_soundfont(
     info = SOUNDFONT_CATALOG[name]
     target_dir = target_dir or get_soundfont_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / info["filename"]
+    filename = str(info["filename"])
+    target_path = target_dir / filename
 
     # Skip if exists (unless force)
     if target_path.exists() and not force:
         return target_path
 
-    url = info["url"]
+    url = str(info["url"])
 
     # Download to temp file first
     with tempfile.NamedTemporaryFile(delete=False, suffix=".sf2") as tmp:
@@ -122,7 +124,7 @@ def download_soundfont(
 
 
 def _download_file(
-    url: str, target: Path, progress_callback: callable | None = None
+    url: str, target: Path, progress_callback: Callable[[int, int], None] | None = None
 ) -> None:
     """Download a file with optional progress callback."""
     request = urllib.request.Request(
@@ -156,7 +158,7 @@ def _file_sha256(path: Path) -> str:
 
 def ensure_soundfont(
     name: str = DEFAULT_SOUNDFONT,
-    progress_callback: callable | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Ensure a SoundFont is available, downloading if necessary.
 

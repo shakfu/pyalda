@@ -15,12 +15,12 @@ from ..types import MidiSequence
 
 # Try to import the native module
 try:
-    from ... import _tsf
+    from ... import _tsf  # type: ignore[attr-defined]
 
     HAS_TSF = True
 except ImportError:
     HAS_TSF = False
-    _tsf = None  # type: ignore
+    _tsf = None
 
 
 def is_available() -> bool:
@@ -193,13 +193,13 @@ class TsfBackend(MidiBackend):
             RuntimeError: If TinySoundFont module is not available.
             FileNotFoundError: If no SoundFont is found.
         """
-        if not HAS_TSF:
+        if not HAS_TSF or _tsf is None:
             raise RuntimeError(
                 "TinySoundFont backend not available. "
                 "The _tsf native module was not built or failed to load."
             )
 
-        self._player = _tsf.TsfPlayer()
+        self._player = _tsf.TsfPlayer()  # type: ignore[union-attr]
         self._soundfont_path: Path | None = None
 
         # Find SoundFont

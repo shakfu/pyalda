@@ -1,10 +1,9 @@
 """Tests for the TinySoundFont backend."""
 
 import os
-import tempfile
 import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -15,8 +14,14 @@ from aldakit.midi.types import MidiSequence, MidiNote, MidiProgramChange
 # Check if TSF backend is available
 try:
     from aldakit import _tsf
-    from aldakit.midi.backends import TsfBackend, HAS_TSF, find_soundfont, list_soundfonts
+    from aldakit.midi.backends import (
+        TsfBackend,
+        HAS_TSF,
+        find_soundfont,
+        list_soundfonts,
+    )
     from aldakit.midi.backends.tsf_backend import is_available
+
     TSF_AVAILABLE = HAS_TSF
 except ImportError:
     TSF_AVAILABLE = False
@@ -24,13 +29,14 @@ except ImportError:
     TsfBackend = None
     find_soundfont = None
     list_soundfonts = None
-    is_available = lambda: False
+
+    def is_available():  # stub/fallback when TSF backend import fails
+        return False
 
 
 # Skip all tests if TSF not available
 pytestmark = pytest.mark.skipif(
-    not TSF_AVAILABLE,
-    reason="TinySoundFont backend not available"
+    not TSF_AVAILABLE, reason="TinySoundFont backend not available"
 )
 
 
@@ -83,6 +89,7 @@ class TestFindSoundFont:
             # Should fall back to searching other locations
             result = find_soundfont()
             # Result depends on system - may be None or found elsewhere
+            assert result is None or isinstance(result, Path)
 
     def test_list_soundfonts_returns_list(self):
         result = list_soundfonts()
@@ -129,7 +136,8 @@ class TestTsfBackend:
         backend = TsfBackend(soundfont=soundfont_path)
         backend.set_gain(0.5)
         backend.set_gain(1.5)
-        # Should not raise
+        # Should not raise, backend still valid
+        assert backend.preset_count > 0
 
     def test_backend_context_manager(self, soundfont_path):
         with TsfBackend(soundfont=soundfont_path) as backend:
@@ -152,7 +160,9 @@ class TestTsfPlayback:
         # Create a minimal sequence
         sequence = MidiSequence(
             notes=[
-                MidiNote(pitch=60, velocity=100, start_time=0.0, duration=0.1, channel=0),
+                MidiNote(
+                    pitch=60, velocity=100, start_time=0.0, duration=0.1, channel=0
+                ),
             ],
             program_changes=[
                 MidiProgramChange(program=0, time=0.0, channel=0),
@@ -172,9 +182,15 @@ class TestTsfPlayback:
         # C major chord
         sequence = MidiSequence(
             notes=[
-                MidiNote(pitch=60, velocity=80, start_time=0.0, duration=0.2, channel=0),
-                MidiNote(pitch=64, velocity=80, start_time=0.0, duration=0.2, channel=0),
-                MidiNote(pitch=67, velocity=80, start_time=0.0, duration=0.2, channel=0),
+                MidiNote(
+                    pitch=60, velocity=80, start_time=0.0, duration=0.2, channel=0
+                ),
+                MidiNote(
+                    pitch=64, velocity=80, start_time=0.0, duration=0.2, channel=0
+                ),
+                MidiNote(
+                    pitch=67, velocity=80, start_time=0.0, duration=0.2, channel=0
+                ),
             ],
             program_changes=[
                 MidiProgramChange(program=0, time=0.0, channel=0),
@@ -191,7 +207,9 @@ class TestTsfPlayback:
         # Longer sequence
         sequence = MidiSequence(
             notes=[
-                MidiNote(pitch=60, velocity=80, start_time=0.0, duration=2.0, channel=0),
+                MidiNote(
+                    pitch=60, velocity=80, start_time=0.0, duration=2.0, channel=0
+                ),
             ],
         )
 
@@ -208,14 +226,23 @@ class TestTsfPlayback:
 
         sequence = MidiSequence(
             notes=[
-                MidiNote(pitch=60, velocity=80, start_time=0.0, duration=0.5, channel=0),
+                MidiNote(
+                    pitch=60, velocity=80, start_time=0.0, duration=0.5, channel=0
+                ),
             ],
         )
 
         backend.play(sequence)
-        time.sleep(0.1)
-        t = backend.current_time()
-        assert t > 0.0
+
+        # Poll for time advancement with timeout (audio thread startup can be slow)
+        t = 0.0
+        for _ in range(20):  # Up to 1 second total
+            time.sleep(0.05)
+            t = backend.current_time()
+            if t > 0.0:
+                break
+
+        assert t > 0.0, "current_time() never advanced from 0.0"
 
         backend.stop()
 
@@ -236,15 +263,17 @@ class TestScoreAudioBackend:
     def test_score_play_audio_backend(self, soundfont_path):
         score = Score("piano: c8 d e")
         score.play(backend="audio", wait=True)
-        # Should complete without error
+        assert score.duration > 0
 
     def test_score_play_audio_with_soundfont(self, soundfont_path):
         score = Score("piano: c4")
         score.play(backend="audio", soundfont=str(soundfont_path), wait=True)
+        assert score.duration > 0
 
     def test_score_play_audio_chord(self, soundfont_path):
         score = Score("piano: c/e/g")
         score.play(backend="audio", wait=True)
+        assert score.duration > 0
 
     def test_score_play_audio_multiple_parts(self, soundfont_path):
         score = Score("""
@@ -252,6 +281,7 @@ class TestScoreAudioBackend:
             violin: e4 f g
         """)
         score.play(backend="audio", wait=True)
+        assert score.duration > 0
 
     def test_score_play_audio_with_tempo(self, soundfont_path):
         score = Score("""
@@ -260,6 +290,7 @@ class TestScoreAudioBackend:
             c8 d e f g a b > c
         """)
         score.play(backend="audio", wait=True)
+        assert score.duration > 0
 
 
 class TestTsfBackendSave:
@@ -270,7 +301,9 @@ class TestTsfBackendSave:
 
         sequence = MidiSequence(
             notes=[
-                MidiNote(pitch=60, velocity=80, start_time=0.0, duration=0.5, channel=0),
+                MidiNote(
+                    pitch=60, velocity=80, start_time=0.0, duration=0.5, channel=0
+                ),
             ],
         )
 
@@ -291,13 +324,17 @@ class TestTsfBackendNoSoundFont:
 
     def test_init_raises_without_soundfont(self):
         # Temporarily hide all SoundFonts
-        with patch("aldakit.midi.backends.tsf_backend.find_soundfont", return_value=None):
+        with patch(
+            "aldakit.midi.backends.tsf_backend.find_soundfont", return_value=None
+        ):
             with pytest.raises(FileNotFoundError) as exc_info:
                 TsfBackend()
             assert "No SoundFont" in str(exc_info.value)
 
     def test_score_play_audio_raises_without_soundfont(self):
-        with patch("aldakit.midi.backends.tsf_backend.find_soundfont", return_value=None):
+        with patch(
+            "aldakit.midi.backends.tsf_backend.find_soundfont", return_value=None
+        ):
             score = Score("piano: c")
             with pytest.raises(FileNotFoundError):
                 score.play(backend="audio")
