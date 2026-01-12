@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SoundFontManager` class** (`aldakit.midi.soundfont`) - Centralized SoundFont management
+  - `find()` - Search common locations for a General MIDI SoundFont
+  - `list()` - List all SoundFont files found in common locations
+  - `download(name)` - Download a SoundFont from the catalog with SHA256 verification
+  - `ensure(name)` - Find existing or download if not found
+  - `setup(name)` - Interactive setup with progress display
+  - `setup_all(force)` - Download all SoundFonts from the catalog
+  - `verify_checksums()` - Verify SHA256 checksums for all downloaded SoundFonts
+  - `get_search_paths()` - Get the list of paths searched for SoundFont files
+  - `list_available_downloads()` - List SoundFonts available for download
+  - Configurable `soundfont_dir` and `catalog` via constructor
+  - All module-level functions preserved for backwards compatibility
+
+- **New module-level functions** (`aldakit.midi.soundfont`)
+  - `setup_all_soundfonts(force=False)` - Download all (3) SoundFonts from the catalog
+  - `verify_soundfont_checksums()` - Verify SHA256 checksums for all downloaded SoundFonts
+
+### Changed
+
+- **SoundFont management refactored** - All SoundFont discovery, downloading, and verification logic now consolidated in `soundfont.py` module (previously split between `soundfont.py` and `tsf_backend.py`)
+- **SoundFont search order updated** - `~/.aldakit/soundfonts/` is now searched first (after `ALDAKIT_SOUNDFONT` env var), before user music folders and system locations
+
 ## [0.1.9]
 
 ### Added

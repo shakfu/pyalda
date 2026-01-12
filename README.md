@@ -939,13 +939,48 @@ On Windows (PowerShell): `Get-FileHash -Algorithm SHA256`
 **Option 2: Auto-download**
 
 ```python
-from aldakit.midi.soundfont import setup_soundfont
+from aldakit.midi.soundfont import setup_soundfont, setup_all_soundfonts
 
 # Downloads TimGM6mb.sf2 (~6 MB) to ~/.aldakit/soundfonts/
 setup_soundfont()
+
+# Or download all available SoundFonts from the catalog
+setup_all_soundfonts()
 ```
 
-**Option 3: Environment variable**
+**Option 3: Using SoundFontManager**
+
+For more control, use the `SoundFontManager` class:
+
+```python
+from aldakit.midi.soundfont import SoundFontManager
+
+manager = SoundFontManager()
+
+# Find existing SoundFont
+sf = manager.find()
+
+# List all found SoundFonts
+for path in manager.list():
+    print(path)
+
+# Download a specific SoundFont (with SHA256 verification)
+path = manager.download("FluidR3_GM")
+
+# Download all SoundFonts from catalog
+paths = manager.setup_all()
+
+# Verify checksums of downloaded files
+results = manager.verify_checksums()
+for name, valid in results.items():
+    print(f"{name}: {'OK' if valid else 'FAILED'}")
+
+# List available downloads
+for name, info in manager.list_available_downloads().items():
+    print(f"{name}: {info['size_mb']} MB - {info['description']}")
+```
+
+**Option 4: Environment variable**
 
 ```bash
 export ALDAKIT_SOUNDFONT=/path/to/your/soundfont.sf2

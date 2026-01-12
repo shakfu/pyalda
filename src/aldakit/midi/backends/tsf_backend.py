@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .base import MidiBackend
 from ..smf import write_midi_file
+from ..soundfont import find_soundfont, list_soundfonts
 from ..types import MidiSequence
 
 # Try to import the native module
@@ -28,133 +29,8 @@ def is_available() -> bool:
     return HAS_TSF
 
 
-def find_soundfont() -> Path | None:
-    """Search common locations for a General MIDI SoundFont.
-
-    Returns:
-        Path to a SoundFont file, or None if not found.
-    """
-    import os
-
-    # Check environment variable first
-    env_path = os.environ.get("ALDAKIT_SOUNDFONT")
-    if env_path:
-        p = Path(env_path)
-        if p.exists():
-            return p
-
-    # Common SoundFont names (ordered by preference)
-    soundfont_names = [
-        "FluidR3_GM.sf2",
-        "FluidR3_GS.sf2",
-        "GeneralUser_GS.sf2",
-        "TimGM6mb.sf2",
-        "SGM-V2.01.sf2",
-        "Arachno.sf2",
-        "default.sf2",
-    ]
-
-    # Search paths (platform-dependent)
-    search_paths: list[Path] = []
-
-    # User locations (all platforms)
-    home = Path.home()
-    search_paths.extend(
-        [
-            home / "Music" / "sf2",
-            home / "Music" / "SoundFonts",
-            home / ".local" / "share" / "soundfonts",
-            home / ".local" / "share" / "sounds" / "sf2",
-        ]
-    )
-
-    # aldakit data directory
-    search_paths.append(home / ".aldakit" / "soundfonts")
-
-    # Linux system locations
-    search_paths.extend(
-        [
-            Path("/usr/share/soundfonts"),
-            Path("/usr/share/sounds/sf2"),
-            Path("/usr/local/share/soundfonts"),
-        ]
-    )
-
-    # macOS locations
-    search_paths.extend(
-        [
-            Path("/Library/Audio/Sounds/Banks"),
-            home / "Library" / "Audio" / "Sounds" / "Banks",
-        ]
-    )
-
-    # Windows locations
-    search_paths.extend(
-        [
-            Path("C:/soundfonts"),
-            home / "Documents" / "SoundFonts",
-        ]
-    )
-
-    # Search for specific names first
-    for search_path in search_paths:
-        if not search_path.exists():
-            continue
-        for name in soundfont_names:
-            sf_path = search_path / name
-            if sf_path.exists():
-                return sf_path
-
-    # Fall back to any .sf2 file
-    for search_path in search_paths:
-        if not search_path.exists():
-            continue
-        sf2_files = sorted(search_path.glob("*.sf2"))
-        if sf2_files:
-            return sf2_files[0]
-
-    return None
-
-
-def list_soundfonts() -> list[Path]:
-    """List all SoundFont files found in common locations.
-
-    Returns:
-        List of paths to SoundFont files.
-    """
-    import os
-
-    found: list[Path] = []
-    seen: set[Path] = set()
-
-    # Check environment variable
-    env_path = os.environ.get("ALDAKIT_SOUNDFONT")
-    if env_path:
-        p = Path(env_path)
-        if p.exists() and p not in seen:
-            found.append(p)
-            seen.add(p)
-
-    # Search paths
-    home = Path.home()
-    search_paths = [
-        home / "Music" / "sf2",
-        home / "Music" / "SoundFonts",
-        home / ".local" / "share" / "soundfonts",
-        home / ".aldakit" / "soundfonts",
-        Path("/usr/share/soundfonts"),
-        Path("/usr/share/sounds/sf2"),
-    ]
-
-    for search_path in search_paths:
-        if not search_path.exists():
-            continue
-        for sf_path in search_path.glob("*.sf2"):
-            if sf_path not in seen:
-                found.append(sf_path)
-                seen.add(sf_path)
-
-    return sorted(found)
+# Re-export for backwards compatibility (functions now live in soundfont.py)
+__all__ = ["TsfBackend", "is_available", "find_soundfont", "list_soundfonts"]
 
 
 class TsfBackend(MidiBackend):
